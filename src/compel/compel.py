@@ -29,8 +29,7 @@ class Compel:
                  padding_attention_mask_value: int = 1,
                  downweight_mode: DownweightMode = DownweightMode.MASK,
                  returned_embeddings_type: ReturnedEmbeddingsType = ReturnedEmbeddingsType.LAST_HIDDEN_STATES_NORMALIZED,
-                 requires_pooled: Union[bool, List[bool]] = False,
-                 device: Optional[str] = None
+                 requires_pooled: Union[bool, List[bool]] = False
                  ):
         """
         Initialize Compel. The tokenizer and text_encoder can be lifted directly from any DiffusionPipeline. For SDXL,
@@ -82,12 +81,7 @@ class Compel:
                                                             downweight_mode=downweight_mode,
                                                             returned_embeddings_type=returned_embeddings_type,
                                                             )
-        self._device = device
         self.requires_pooled = requires_pooled
-
-    @property
-    def device(self):
-        return self._device if self._device else self.conditioning_provider.text_encoder.device
 
     def make_conditioning_scheduler(self, positive_prompt: str, negative_prompt: str='')  -> ConditioningScheduler:
         """
@@ -111,7 +105,7 @@ class Compel:
         conditioning, _ = self.build_conditioning_tensor_for_conjunction(conjunction)
 
         if self.requires_pooled:
-            pooled = self.conditioning_provider.get_pooled_embeddings([text], device=self.device)
+            pooled = self.conditioning_provider.get_pooled_embeddings([text])
             return conditioning, pooled
         else:
             return conditioning
@@ -276,7 +270,7 @@ class Compel:
         weights = [x.weight for x in prompt.children]
         return self.conditioning_provider.get_embeddings_for_weighted_prompt_fragments(
             text_batch=[fragments], fragment_weights_batch=[weights],
-            should_return_tokens=should_return_tokens, device=self.device)
+            should_return_tokens=should_return_tokens)
 
 
     def _get_conditioning_for_blend(self, blend: Blend):
