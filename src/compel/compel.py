@@ -81,7 +81,6 @@ class Compel:
                                                             padding_attention_mask_value = padding_attention_mask_value,
                                                             downweight_mode=downweight_mode,
                                                             returned_embeddings_type=returned_embeddings_type,
-                                                            device=device
                                                             )
         self._device = device
         self.requires_pooled = requires_pooled

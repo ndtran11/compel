@@ -6,6 +6,7 @@ from typing import Callable, Union, Optional
 import torch
 from transformers import CLIPTokenizer, CLIPTextModel, CLIPTextModelWithProjection
 from typing import List, Tuple
+import warnings
 
 __all__ = ["EmbeddingsProvider", "DownweightMode", "ReturnedEmbeddingsType"]
 
@@ -34,8 +35,7 @@ class EmbeddingsProvider:
                  truncate: bool = True,
                  padding_attention_mask_value: int = 1,
                  downweight_mode: DownweightMode = DownweightMode.MASK,
-                 returned_embeddings_type: ReturnedEmbeddingsType = ReturnedEmbeddingsType.LAST_HIDDEN_STATES_NORMALIZED,
-                 device: Optional[str] = None
+                 returned_embeddings_type: ReturnedEmbeddingsType = ReturnedEmbeddingsType.LAST_HIDDEN_STATES_NORMALIZED
                  ):
         """
         `tokenizer`: converts strings to lists of int token ids
@@ -58,10 +58,13 @@ class EmbeddingsProvider:
         self.padding_attention_mask_value = padding_attention_mask_value
         self.downweight_mode = downweight_mode
         self.returned_embeddings_type = returned_embeddings_type
-        self.device = device if device else self.text_encoder.device
 
         # by default always use float32
         self.get_dtype_for_device = dtype_for_device_getter
+        
+    @property
+    def device(self):
+        return self.text_encoder.device
 
 
     @property
@@ -233,12 +236,12 @@ class EmbeddingsProvider:
 
         return result
 
-    def get_pooled_embeddings(self, texts: List[str], attention_mask: Optional[torch.Tensor]=None, device: Optional[str]=None) -> Optional[torch.Tensor]:
+    def get_pooled_embeddings(self, texts: List[str], attention_mask: Optional[torch.Tensor]=None) -> Optional[torch.Tensor]:
         
         device = device or self.device
 
         token_ids = self.get_token_ids(texts, padding="max_length", truncation_override=True)
-        token_ids = torch.tensor(token_ids, dtype=torch.long).to(device)
+        token_ids = torch.tensor(token_ids, dtype=torch.long).to(self.device)
 
         text_encoder_output = self.text_encoder(token_ids, attention_mask, return_dict=True)
         pooled = text_encoder_output.text_embeds
@@ -246,8 +249,7 @@ class EmbeddingsProvider:
         return pooled
 
 
-    def get_token_ids_and_expand_weights(self, fragments: List[str], weights: List[float], device: str
-                                         ) -> (torch.Tensor, torch.Tensor, torch.Tensor):
+    def get_token_ids_and_expand_weights(self, fragments: List[str], weights: List[float]) -> (torch.Tensor, torch.Tensor, torch.Tensor):
         '''
         Given a list of text fragments and corresponding weights: tokenize each fragment, append the token sequences
         together and return a padded token sequence starting with the bos marker, ending with the eos marker, and padded
@@ -277,10 +279,9 @@ class EmbeddingsProvider:
             # fill out weights tensor with one float per token
             all_token_weights += [float(weight)] * len(this_fragment_token_ids)
 
-        return self._chunk_and_pad_token_ids(all_token_ids, all_token_weights, device=device)
+        return self._chunk_and_pad_token_ids(all_token_ids, all_token_weights)
 
-    def _chunk_and_pad_token_ids(self, token_ids: List[int], token_weights: List[float], device: str
-                                 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _chunk_and_pad_token_ids(self, token_ids: List[int], token_weights: List[float]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
         remaining_token_ids = token_ids
         remaining_token_weights = token_weights
@@ -315,11 +316,11 @@ class EmbeddingsProvider:
             if self.truncate_to_model_max_length or len(remaining_token_ids) == 0:
                 break
 
-        all_token_ids_tensor = torch.tensor(all_token_ids, dtype=torch.long, device=device)
+        all_token_ids_tensor = torch.tensor(all_token_ids, dtype=torch.long, device=self.device)
         all_per_token_weights_tensor = torch.tensor(all_token_weights,
-                                                    dtype=self.get_dtype_for_device(device),
-                                                    device=device)
-        all_masks = torch.tensor(all_masks, dtype=torch.long, device=device)
+                                                    dtype=self.get_dtype_for_device(self.device),
+                                                    device=self.device)
+        all_masks = torch.tensor(all_masks, dtype=torch.long, device=self.device)
         # print(f"assembled all_token_ids_tensor with shape {all_token_ids_tensor.shape}")
         return all_token_ids_tensor, all_per_token_weights_tensor, all_masks
 
@@ -327,8 +328,7 @@ class EmbeddingsProvider:
     def build_weighted_embedding_tensor(self,
                                         token_ids: torch.Tensor,
                                         per_token_weights: torch.Tensor,
-                                        attention_mask: Optional[torch.Tensor] = None,
-                                        device: Optional[str] = None) -> torch.Tensor:
+                                        attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Build a tensor that embeds the passed-in token IDs and applies the given per_token weights
         
@@ -346,14 +346,11 @@ class EmbeddingsProvider:
         if token_ids.shape[0] % self.max_token_count != 0:
             raise ValueError(f"token_ids has shape {token_ids.shape} - expected a multiple of {self.max_token_count}")
 
-        if device is None:
-            device = self.device
-
         chunk_start_index = 0
         empty_token_ids = torch.tensor([self.tokenizer.bos_token_id] +
                                        [self.tokenizer.eos_token_id] +
                                        [self.tokenizer.pad_token_id] * (self.max_token_count - 2),
-                                       dtype=torch.int, device=device).unsqueeze(0)
+                                       dtype=torch.int, device=self.device).unsqueeze(0)
         empty_z = self._encode_token_ids_to_embeddings(empty_token_ids)
         weighted_z = None
 
@@ -488,6 +485,12 @@ class EmbeddingsProviderMulti:
             for tokenizer, text_encoder, returned_embeddings_type in zip(tokenizers, text_encoders, returned_embeddings_type)
         ]
         self.requires_pooled_mask = requires_pooled_mask
+        
+    @property
+    def device(self):
+        if not all(provider.device == self.embedding_providers[0].device for provider in self.embedding_providers):
+            raise ValueError("All embedding providers must be on the same device")
+        return self.embedding_providers[0].device
 
     @property
     def text_encoder(self):
@@ -503,10 +506,10 @@ class EmbeddingsProviderMulti:
         return self.embedding_providers[0].get_token_ids(self, *args, **kwargs)
 
     def get_pooled_embeddings(
-        self, texts: List[str], attention_mask: Optional[torch.Tensor] = None, device: Optional[str] = None
+        self, texts: List[str], attention_mask: Optional[torch.Tensor] = None
     ) -> Optional[torch.Tensor]:
 
-        pooled = [self.embedding_providers[provider_index].get_pooled_embeddings(texts, attention_mask, device=device)
+        pooled = [self.embedding_providers[provider_index].get_pooled_embeddings(texts, attention_mask, device=self.device)
                   for provider_index, requires_pooled in enumerate(self.requires_pooled_mask) if requires_pooled]
 
         if len(pooled) == 0:
@@ -518,10 +521,9 @@ class EmbeddingsProviderMulti:
                                                      text_batch: List[List[str]],
                                                      fragment_weights_batch: List[List[float]],
                                                      should_return_tokens: bool = False,
-                                                     device='cpu',
                                  ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
 
-        outputs = [provider.get_embeddings_for_weighted_prompt_fragments(text_batch, fragment_weights_batch, should_return_tokens=should_return_tokens, device=device) for provider in self.embedding_providers]
+        outputs = [provider.get_embeddings_for_weighted_prompt_fragments(text_batch, fragment_weights_batch, should_return_tokens=should_return_tokens, device=self.device) for provider in self.embedding_providers]
 
         text_embeddings_list = []
         tokens = []
