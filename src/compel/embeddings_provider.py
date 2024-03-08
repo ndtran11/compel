@@ -75,6 +75,7 @@ class EmbeddingsProvider:
     @classmethod
     def apply_embedding_weights(cls, embeddings: torch.Tensor, per_embedding_weights: List[float],
                                 normalize: bool) -> torch.Tensor:
+
         per_embedding_weights = torch.tensor(per_embedding_weights, dtype=embeddings.dtype, device=embeddings.device)
         if normalize:
             per_embedding_weights = per_embedding_weights / torch.sum(per_embedding_weights)
@@ -87,8 +88,7 @@ class EmbeddingsProvider:
     def get_embeddings_for_weighted_prompt_fragments(self,
                                                      text_batch: List[List[str]],
                                                      fragment_weights_batch: List[List[float]],
-                                                     should_return_tokens: bool = False,
-                                                     device='cpu'
+                                                     should_return_tokens: bool = False
                                  ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
 
@@ -119,8 +119,8 @@ class EmbeddingsProvider:
             # closer the resulting embedding is to an embedding for a prompt that simply lacks this fragment.
 
             # handle weights >=1
-            tokens, per_token_weights, mask = self.get_token_ids_and_expand_weights(fragments, weights, device=device)
-            base_embedding = self.build_weighted_embedding_tensor(tokens, per_token_weights, mask, device=device)
+            tokens, per_token_weights, mask = self.get_token_ids_and_expand_weights(fragments, weights)
+            base_embedding = self.build_weighted_embedding_tensor(tokens, per_token_weights)
 
             # this is our starting point
             embeddings = base_embedding.unsqueeze(0)
@@ -150,16 +150,14 @@ class EmbeddingsProvider:
                             mask_without_fragment[self.tokenizer.model_max_length-1::self.tokenizer.model_max_length] = 1
                         embedding_without_this = self.build_weighted_embedding_tensor(tokens,
                                                                                       per_token_weights,
-                                                                                      mask_without_fragment,
-                                                                                      device=device)
+                                                                                      mask_without_fragment)
                     else:
                         fragments_without_this = fragments[0:index] + fragments[index+1:]
                         weights_without_this = weights[0:index] + weights[index+1:]
                         tokens_without_fragment, per_token_weights_without_fragment, mask_without_fragment = \
-                            self.get_token_ids_and_expand_weights(fragments_without_this, weights_without_this, device=device)
+                            self.get_token_ids_and_expand_weights(fragments_without_this, weights_without_this)
                         embedding_without_this = self.build_weighted_embedding_tensor(tokens_without_fragment,
-                                                                                      per_token_weights_without_fragment,
-                                                                                      device=device)
+                                                                                      per_token_weights_without_fragment)
 
                     embeddings = torch.cat((embeddings, embedding_without_this.unsqueeze(0)), dim=1)
                     # weight of the embedding *without* this fragment gets *stronger* as its weight approaches 0
@@ -237,9 +235,6 @@ class EmbeddingsProvider:
         return result
 
     def get_pooled_embeddings(self, texts: List[str], attention_mask: Optional[torch.Tensor]=None) -> Optional[torch.Tensor]:
-        
-        device = device or self.device
-
         token_ids = self.get_token_ids(texts, padding="max_length", truncation_override=True)
         token_ids = torch.tensor(token_ids, dtype=torch.long).to(self.device)
 
@@ -523,7 +518,7 @@ class EmbeddingsProviderMulti:
                                                      should_return_tokens: bool = False,
                                  ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
 
-        outputs = [provider.get_embeddings_for_weighted_prompt_fragments(text_batch, fragment_weights_batch, should_return_tokens=should_return_tokens, device=self.device) for provider in self.embedding_providers]
+        outputs = [provider.get_embeddings_for_weighted_prompt_fragments(text_batch, fragment_weights_batch, should_return_tokens=should_return_tokens) for provider in self.embedding_providers]
 
         text_embeddings_list = []
         tokens = []
