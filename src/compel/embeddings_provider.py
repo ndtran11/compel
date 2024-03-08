@@ -509,7 +509,7 @@ class EmbeddingsProviderMulti:
         self, texts: List[str], attention_mask: Optional[torch.Tensor] = None
     ) -> Optional[torch.Tensor]:
 
-        pooled = [self.embedding_providers[provider_index].get_pooled_embeddings(texts, attention_mask, device=self.device)
+        pooled = [self.embedding_providers[provider_index].get_pooled_embeddings(texts, attention_mask)
                   for provider_index, requires_pooled in enumerate(self.requires_pooled_mask) if requires_pooled]
 
         if len(pooled) == 0:
